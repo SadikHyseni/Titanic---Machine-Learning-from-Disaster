@@ -65,16 +65,19 @@ print("\n" + "=" * 60)
 print("STEP 3: CLEAN")
 print("=" * 60)
 
+# Flag each row's origin so train/test can be separated again after preprocessing
 train['is_train'] = 1
 test['is_train'] = 0
 
-test['Survived'] = np.nan
+test['Survived'] = np.nan # placeholder so both frames share the same columns
 
+# Combine train and test to apply identical preprocessing to both
 full = pd.concat([train, test], sort=False).reset_index(drop=True)
 
-"Get the Title from the Name"
+# Extract title (Mr/Mrs/Miss/etc.) from the Name field, e.g. "Braund, Mr. Owen Harris" -> Mr
 full['Title'] = full['Name'].str.extract(r',\s*([^\.]+)\.')
 
+# Consolidate rare/alternate titles into standard categories
 title_map = {
     'Mlle': 'Miss', 'Ms': 'Miss', 'Mme': 'Mrs',     
     'Lady': 'Rare', 'Countess': 'Rare', 'Capt': 'Rare', 'Col': 'Rare',
@@ -83,28 +86,33 @@ title_map = {
 }
 
 full['Title'] = full['Title'].replace(title_map) 
-
 full.loc[~full['Title'].isin(['Mr', 'Mrs', 'Miss', 'Master', 'Rare']), 'Title'] = 'Rare'
+
+# Derive family size and solo-traveler flag from SibSp/Parch
 full['FamilySize'] = full['SibSp'] + full['Parch'] + 1 
 full['IsAlone'] = (full['FamilySize'] == 1).astype(int)
-"Fill missing values "
 
+# Impute Age using the median within the same Title/Pclass group
 full['Age'] = full.groupby(['Title', 'Pclass'])['Age'].transform(lambda x: x.fillna(x.median()))
-full['Age'] = full['Age'].fillna(full['Age'].median())
+full['Age'] = full['Age'].fillna(full['Age'].median())  # fallback for any group with no data
 
+# Impute Fare using the median for that passenger's class
 full['Fare'] = full.groupby('Pclass')['Fare'].transform(lambda x: x.fillna(x.median()))
+# Impute Embarked with the most frequent value
 full['Embarked'] = full['Embarked'].fillna(full['Embarked'].mode()[0])
 
+# Cabin has too many missing values to use directly; reduce to a presence flag
 full['HasCabin'] = full['Cabin'].notnull().astype(int)
 
+# Bucket Age and Fare into bands to help tree-based models split more effectively
 full['AgeBand'] = pd.cut(full['Age'], bins=[0, 12, 18, 35, 60, 100], labels=[0, 1, 2, 3, 4]).astype(int)
-
 full['FareBand'] = pd.qcut(full['Fare'], 4, labels=[0, 1, 2, 3]).astype(int)
 
+# Encode categorical variables
 full['Sex'] = full['Sex'].map({'male': 0, 'female': 1})
-
 full = pd.get_dummies(full, columns=['Embarked', 'Title'], drop_first=True)
 
+# Final feature set used for training
 feature_cols = [
     'Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'FamilySize', 'IsAlone', 'HasCabin', 'AgeBand', 'FareBand'] + [c for c in full.columns if c.startswith('Embarked_') or c.startswith('Title_')]
 
@@ -112,18 +120,19 @@ print (f"Final feature set ({len(feature_cols)} features):" , feature_cols)
 
 print("Remaining missing values: \n", full[feature_cols].isnull().sum().sum())
 
+# Split back into train/test now that preprocessing is complete
 train_processed = full[full['is_train'] == 1]
 test_processed = full[full['is_train'] == 0]
 
 X = train_processed[feature_cols]
 y = train_processed['Survived'].astype(int)
-
 X_test = test_processed[feature_cols]
 
 print("\n" + "=" * 60)
 print("STEP 4: COMPARE MODELS")
 print("=" * 60)
 
+# 5-fold stratified cross-validation for an unbiased accuracy estimate
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
 models = {
@@ -149,7 +158,7 @@ print("=" * 60)
 
 final_model = models[best_model_name]
 
-final_model.fit(X, y)
+final_model.fit(X, y) # retrain on full training set for the final model
 
 predictions = final_model.predict(X_test).astype(int)
 
